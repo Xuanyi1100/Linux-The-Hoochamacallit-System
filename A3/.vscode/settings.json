@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    },
+    "C_Cpp.default.compilerPath": "/usr/bin/gcc",
+    "terminal.integrated.profiles.windows": {
+        "Ubuntu-WSL": {
+            "path": "wsl.exe"
+        }
+    },
+    "makefile.configureOnOpen": true
+}
