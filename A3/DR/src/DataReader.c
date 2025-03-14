@@ -9,10 +9,52 @@
 #include <sys/shm.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <errno.h>
 
+void write_log(const char* message,int DCindex, id_t sender_pid, int status_code, int logtype) {
+    // Get current time
+    time_t current_time = time(NULL);
+    
+    // Convert to local time
+    struct tm* local_time = localtime(&current_time);
+    
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time);
+    
+    // Open log file in append mode
+    FILE* log_file = fopen("/tmp/dataMonitor.log", "a");
+    if (log_file != NULL) {
+        switch (logtype)
+        {
+        case 1:
+            fprintf(log_file, "[%s]:DC-%d [%d] removed from master list - NON-RESPONSIVE \n", time_str,DCindex, sender_pid);
+            break;
+        case 2:
+            fprintf(log_file, "[%s]:DC-%d [%d] added to the master list - NEW DC - Status 0 (Everything is OKAY) \n", time_str,DCindex, sender_pid);
+            break;
+        case 3:
+            fprintf(log_file, "[%s]:DC-%d [%d] updated in the master list - MSG RECEIVED - Status %d (%s) \n", time_str,DCindex, sender_pid, status_code,message);
+            break;
+        case 4:
+            fprintf(log_file, "[%s]:All DCs have gone offline or terminated - DR TERMINATING \n", time_str);
+            break;
+        case 5:
+            fprintf(log_file, "[%s]:DC-%d [%d] has gone OFFLINE - removing from master-list \n", time_str,DCindex, sender_pid);
+            break;
+        case 6:
+            fprintf(log_file, "[%s]:Message queue deleted - DR TERMINATING \n", time_str);
+            break;    
+        default:
+            fprintf(log_file, "default log \n");
+            break;
+        }
+        
+        fclose(log_file);
+    }
+}
 
 int main(void)
-{
+{   
     // create message queue
     mskey = ftok(PATH_TO_KEY, PROJECT_ID);
     if (mskey == -1) {
@@ -57,25 +99,22 @@ int main(void)
     master_list->msgQueueID = mid;
     master_list->numberOfDCs = 0;                           
 
-
     sleep(15);
-    
+    QueueMessage received_msg;
     bool allDCOffLine = false;
+
     while(!allDCOffLine) 
     {
-        QueueMessage received_msg;
-
-        if(msgrcv(mid, &received_msg, sizeof(QueueMessage) - sizeof(long), 0, 0) == -1) {
-            perror("Message receive failed");
-            msgctl(mid, IPC_RMID, NULL);  // Clean up
-            break;  // Exit loop on error
+        
+        if((mid = msgget(mskey, 0)) == -1)
+        {
+            write_log( "", 0 , 0 , 0 , 6);
+            break;
         }
 
-        printf("From PID: %d\n", received_msg.sender_pid);
-        printf("Status: %s\n", received_msg.mtext);
+        msgrcv(mid, &received_msg, sizeof(QueueMessage) - sizeof(long), 0, 0);
+
         time_t current_time = time(NULL);
-        printf("Timestamp: %s", ctime(&current_time));
-        printf("--------------------------\n");
 
         bool isExisting = false;
         int emptySlot = -1;
@@ -87,8 +126,12 @@ int main(void)
                 // Update last heard from time
                 master_list->dc[i].lastTimeHeardFrom = time(NULL);
                 
-                printf("Updated existing DC (PID: %d), last active: %s", 
-                       received_msg.sender_pid, ctime(&master_list->dc[i].lastTimeHeardFrom));                
+                // Log the update
+                if(received_msg.status_code != 6  )
+                {
+                    write_log( received_msg.mtext,i +1 , received_msg.sender_pid , received_msg.status_code , 3);               
+                }
+                
                 isExisting = true;
                 
                 // if off-line, remove it
@@ -108,12 +151,14 @@ int main(void)
                    sizeof(master_list->dc[0]));
             
                     // Log the removal
-                    printf("Removed inactive DC (PID: %d) from slot %d\n", removed_pid, i);
+                    write_log( received_msg.mtext,i+1 , removed_pid , 0 , 5);
             
                     master_list->numberOfDCs--;
                     if(master_list->numberOfDCs == 0)
                     {
                         allDCOffLine = true;
+                        // Log the terminate
+                        write_log( "", 1, removed_pid , 0 , 4);
                     }
                 }
             }
@@ -136,10 +181,11 @@ int main(void)
                 // Increment active DC count if you're tracking it
                 master_list->numberOfDCs++;
                 
-                printf("Added new DC (PID: %d) in slot %d, last active: %s", 
-                       received_msg.sender_pid, emptySlot, 
-                       ctime(&master_list->dc[emptySlot].lastTimeHeardFrom));
-            } else {
+                // Log the new DC
+                write_log( "", emptySlot + 1 , received_msg.sender_pid , 0 , 2);
+            } 
+            else 
+            {
                 // No empty slots available
                 printf("WARNING: Maximum number of DCs reached. Cannot add DC with PID: %d\n", 
                        received_msg.sender_pid);
@@ -148,16 +194,12 @@ int main(void)
 
         // check if any DC beyond 35 seconds, if so, remove it
         for (int i = 0; i < MAX_DC_ROLES; i++) {
-            
-            printf("DC %d , identifier :%d \n", i,master_list->dc[i].dcProcessID);
-            
+                        
             // Calculate how long since we last heard from this DC
             time_t elapsed = current_time - master_list->dc[i].lastTimeHeardFrom;
         
             // If it's been more than 35 seconds, remove this DC
             if (master_list->dc[i].dcProcessID != 0 && elapsed > 35) {
-                printf("DC with PID %d inactive for %ld seconds - removing\n", 
-                master_list->dc[i].dcProcessID, elapsed);
             
                 // Store the PID for logging
                 pid_t removed_pid = master_list->dc[i].dcProcessID;
@@ -173,12 +215,14 @@ int main(void)
                    sizeof(master_list->dc[0]));
             
                 // Log the removal
-                printf("Removed inactive DC (PID: %d) from slot %d\n", removed_pid, i);
+                write_log( "", i +1, removed_pid , 0 , 1);
             
                 master_list->numberOfDCs--;
                 if(master_list->numberOfDCs == 0)
                 {
                     allDCOffLine = true;
+                    // Log the terminate
+                    write_log( "", 1, removed_pid , 0 , 4);
                 }
                 // Decrement i to recheck the current position which now contains the next element
                 i--;
@@ -189,24 +233,17 @@ int main(void)
     }
 
     // clean up 
-    if (msgctl(mid, IPC_RMID, NULL) == -1) {
-        perror("Message queue removal failed");
-    } else {
-         printf("Message queue successfully removed\n");
-    }
+    msgctl(mid, IPC_RMID, NULL);
 
     // First detach from shared memory
     if (shmdt(master_list) == -1) {   
-        perror("shmdt failed");
         exit(EXIT_FAILURE);
     }
 
     // Then mark the segment for removal
     if (shmctl(shmid, IPC_RMID, NULL) == -1) {
-        perror("shmctl removal failed");
         exit(EXIT_FAILURE);
     }
-    printf("Shared memory segment removed\n");
 
     return 0;
 }

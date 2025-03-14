@@ -42,7 +42,7 @@ const char* WheelOfDestruction[] = {
     "kill DC-04 (if it exists)",
     "do nothing",
     "kill DC-05 (if it exists)",
-    "kill DC-10 (if it exists)",
+    "delete the message queue being used between DCs and DR1",
     "kill DC-01 (if it exists)",
     "kill DC-06 (if it exists)",
     "kill DC-02 (if it exists)",

@@ -11,10 +11,43 @@
 #include <unistd.h>
 #include <signal.h>
 
+void write_log(int WODIndex, int dc_num, id_t sender_pid, int logtype) {
+    // Get current time
+    time_t current_time = time(NULL);
+    
+    // Convert to local time
+    struct tm* local_time = localtime(&current_time);
+    
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_time);
+    
+    // Open log file in append mode
+    FILE* log_file = fopen("/tmp/dataCorruptor.log", "a");
+    if (log_file != NULL) {
+        switch (logtype)
+        {
+        case 1:
+            fprintf(log_file, "[%s]:WOD Action %d - DC-%d [%d] TERMINATED \n", time_str, WODIndex, dc_num, sender_pid);
+            break;
+        case 2:
+            fprintf(log_file, "[%s]:DX deleted the msgQ - the DR/DCs can't talk anymore - exiting \n", time_str);
+            break;
+        case 3:
+            fprintf(log_file, "[%s]:DX detected that msgQ is gone - assuming DR/DCs done \n", time_str);
+            break;    
+        default:
+            fprintf(log_file, "default log \n");
+            break;
+        }
+        
+        fclose(log_file);
+    }
+}
+
 // Function to kill a specific DC
-void kill_dc(int dc_num, MasterList* master_list) {
-    // Validate DC number (assuming DC numbers are 1-5)
-    if (dc_num < 1 || dc_num > 5) {
+void kill_dc(int wod_index, int dc_num, MasterList* master_list) {
+    // Validate DC number 
+    if (dc_num < 1 || dc_num > 10) {
         printf("Invalid DC number: %d\n", dc_num);
         return;
     }
@@ -32,13 +65,13 @@ void kill_dc(int dc_num, MasterList* master_list) {
     pid_t target_pid = master_list->dc[index].dcProcessID;
     
     // Send SIGHUP signal to the process
-    printf("Sending SIGHUP to DC%d (PID: %d)\n", dc_num, target_pid);
+
     if (kill(target_pid, SIGHUP) == -1) {
         perror("Failed to send SIGHUP to process");
         return;
     }
+    write_log(wod_index, dc_num, target_pid, 1 );  
     
-    printf("SIGHUP signal sent to DC%d\n", dc_num);
 }
 
 // Function to delete the message queue
@@ -66,7 +99,7 @@ void delete_message_queue() {
     printf("Message queue successfully deleted\n");
 }
 
-void execute_wod_action(const char* action, MasterList* master_list) {
+void execute_wod_action(int wod_index, const char* action, MasterList* master_list) {
     // Check for "do nothing" action
     if (strcmp(action, "do nothing") == 0) {
         printf("Wheel says: Do nothing. Continuing normally.\n");
@@ -76,10 +109,16 @@ void execute_wod_action(const char* action, MasterList* master_list) {
     // Check for "kill DC" action
     if (strncmp(action, "kill DC", 7) == 0) {
         // Extract DC number (assumes format "kill DC X if it exists")
-        int dc_num = action[8] - '0';  // Convert character to integer
-        
+        int dc_num = action[9] - '0';  // Convert character to integer
+        if(dc_num == 0)
+        {
+            dc_num = 10;
+        }
+
         printf("Wheel says: Attempting to kill DC%d if it exists\n", dc_num);
-        kill_dc(dc_num, master_list);
+
+        kill_dc(wod_index, dc_num, master_list);
+        
         return;
     }
     
@@ -87,7 +126,12 @@ void execute_wod_action(const char* action, MasterList* master_list) {
     if (strncmp(action, "delete the message queue", 23) == 0) {
         printf("Wheel says: Deleting the message queue\n");
         delete_message_queue();
-        return;
+        write_log(wod_index, 0, 0, 2 );
+        // Detach itself
+        if (shmdt(master_list) == -1) {
+            perror("shmdt failed");
+        }
+        exit(1);
     }
     
     // Unknown action
@@ -137,6 +181,7 @@ int main() {
         // check if message queue exists
         if((mid= msgget(mskey, 0)) == -1)
         {
+            write_log(0, 0, 0, 3 );
             // Detach itself
             if (shmdt(master_list) == -1) {
                 perror("shmdt failed");
@@ -146,12 +191,13 @@ int main() {
 
         int wod_index = rand()%WHEEL_OF_DESTRUCTION_SIZE;
         const char* selected_action = WheelOfDestruction[wod_index];
+
         // Execute the selected action
-        execute_wod_action(selected_action, master_list);
+        execute_wod_action(wod_index,selected_action, master_list);
        
         // List all active DCs
         for (int i = 0; i < master_list->numberOfDCs; i++) {
-            printf("DC #%d: PID=%d, Last active: %s", i, 
+            printf("DC #%d: PID=%d, Last active: %s", i +1, 
                master_list->dc[i].dcProcessID,
                ctime(&master_list->dc[i].lastTimeHeardFrom));
         }
