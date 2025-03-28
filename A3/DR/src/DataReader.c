@@ -55,6 +55,7 @@ void write_log(const char* message,int DCindex, id_t sender_pid, int status_code
 
 int main(void)
 {   
+    printf("DR starts.\n");
     // create message queue
     mskey = ftok(PATH_TO_KEY, PROJECT_ID);
     if (mskey == -1) {

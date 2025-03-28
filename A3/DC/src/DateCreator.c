@@ -31,6 +31,7 @@ void write_log(const char* message, id_t sender_pid, int status_code) {
 
 int main()
 {
+    printf("D starts.\n");
     // Each process gets a unique seed based on time + PID
     srand(time(NULL) ^ getpid());
 
